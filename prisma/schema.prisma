@@ -1,0 +1,290 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_UNPOOLED")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ----------------------------------------------------
+// 1. USER & WALLET LEDGER
+// ----------------------------------------------------
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  BANNED
+}
+
+model User {
+  id               String      @id @default(cuid())
+  username         String      @unique
+  email            String      @unique
+  password         String
+  role             UserRole    @default(USER)
+  status           UserStatus  @default(ACTIVE)
+  balance          Decimal     @default(0.00) @db.Decimal(12, 2)
+  currency         String      @default("USD")
+  
+  // Developer Reseller API Integration
+  apiKey           String      @unique @default(uuid())
+  ipWhitelist      String[]    @default([])
+  
+  telegramUsername String?
+  lastLoginAt      DateTime?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  orders           Order[]
+  transactions     Transaction[]
+  activityLogs     ActivityLog[]
+  favorites        Favorite[]
+  invoices         PaymentInvoice[]
+
+  @@map("users")
+}
+
+// ----------------------------------------------------
+// 2. CATEGORIES & PRODUCTS
+// ----------------------------------------------------
+model Category {
+  id          String      @id @default(cuid())
+  name        String
+  slug        String      @unique
+  icon        String
+  group       String      // e.g. "HOTMAIL", "FACEBOOK", "TIKTOK", "TWITTER", "INSTAGRAM", "TELEGRAM"
+  sortOrder   Int         @default(0)
+  isActive    Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+
+  products    Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id            String       @id @default(cuid())
+  categoryId    String
+  title         String
+  slug          String       @unique
+  description   String?      @db.Text
+  features      String[]     // Checkmark bullets: ["2FA Enabled", "Old 2015-2022"]
+  nation        String       // "USA", "ASIA", "FRANCE"
+  nationFlag    String       // Flag path
+  priceUSD      Decimal      @db.Decimal(10, 2)
+  priceNGN      Decimal      @default(0.00) @db.Decimal(12, 2)
+  minBuy        Int          @default(1)
+  maxBuy        Int          @default(1000)
+  previewUid    Boolean      @default(false)
+  isPopular     Boolean      @default(false)
+  format        String?      // e.g. "UID|Pass|2FA|Mail|MailPass"
+  warranty      String?      @db.Text
+  isActive      Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  category      Category     @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  stockItems    StockItem[]
+  orders        Order[]
+  favorites     Favorite[]
+
+  @@map("products")
+}
+
+// ----------------------------------------------------
+// 3. THE VAULT (ACCOUNT INVENTORY)
+// ----------------------------------------------------
+enum StockStatus {
+  AVAILABLE
+  RESERVED
+  SOLD
+  DEFECTIVE
+}
+
+model StockItem {
+  id          String       @id @default(cuid())
+  productId   String
+  orderId     String?      // Assigned when purchased
+  credentials String       @db.Text // Sensitive data line (encrypted)
+  previewData String?      // Public preview info (UID, etc.)
+  status      StockStatus  @default(AVAILABLE)
+  addedAt     DateTime     @default(now())
+  soldAt      DateTime?
+
+  product     Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  order       Order?       @relation(fields: [orderId], references: [id])
+
+  @@index([productId, status])
+  @@map("stock_items")
+}
+
+// ----------------------------------------------------
+// 4. ORDERS & FULFILLMENT
+// ----------------------------------------------------
+enum OrderStatus {
+  COMPLETED
+  REFUNDED
+  PARTIAL_REFUND
+}
+
+model Order {
+  id             String       @id @default(cuid())
+  orderNumber    String       @unique // e.g. "ORD-882914"
+  userId         String
+  productId      String
+  quantity       Int
+  unitPrice      Decimal      @db.Decimal(10, 2)
+  totalAmount    Decimal      @db.Decimal(10, 2)
+  currency       String       @default("USD")
+  status         OrderStatus  @default(COMPLETED)
+  couponCode     String?
+  discountAmount Decimal      @default(0.00) @db.Decimal(10, 2)
+  createdAt      DateTime     @default(now())
+
+  user           User         @relation(fields: [userId], references: [id])
+  product        Product      @relation(fields: [productId], references: [id])
+  items          StockItem[]
+
+  @@map("orders")
+}
+
+// ----------------------------------------------------
+// 5. TRANSACTIONS & PAYMENT INVOICES
+// ----------------------------------------------------
+enum TransactionType {
+  DEPOSIT
+  PURCHASE
+  REFUND
+  BONUS
+}
+
+enum TxStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+model Transaction {
+  id            String            @id @default(cuid())
+  userId        String
+  type          TransactionType
+  amount        Decimal           @db.Decimal(12, 2)
+  balanceBefore Decimal           @db.Decimal(12, 2)
+  balanceAfter  Decimal           @db.Decimal(12, 2)
+  currency      String            @default("USD")
+  status        TxStatus          @default(COMPLETED)
+  paymentMethod String            // "CRYPTO_USDT", "KORAPAY", "WALLET_BALANCE", "ADMIN_ADJUST"
+  referenceId   String?           // Order number or Gateway TX ID
+  description   String?
+  createdAt     DateTime          @default(now())
+
+  user          User              @relation(fields: [userId], references: [id])
+
+  @@map("transactions")
+}
+
+enum PaymentGateway {
+  CRYPTO
+  KORAPAY
+}
+
+enum InvoiceStatus {
+  PENDING
+  PAID
+  EXPIRED
+  CANCELLED
+}
+
+model PaymentInvoice {
+  id              String         @id @default(cuid())
+  userId          String
+  gateway         PaymentGateway
+  invoiceCode     String         @unique
+  amountRequested Decimal        @db.Decimal(12, 2)
+  amountReceived  Decimal        @default(0.00) @db.Decimal(12, 2)
+  currency        String         // "USD", "USDT", "NGN"
+  payAddress      String?
+  payUrl          String?
+  txHash          String?
+  status          InvoiceStatus  @default(PENDING)
+  expiresAt       DateTime
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  user            User           @relation(fields: [userId], references: [id])
+
+  @@map("payment_invoices")
+}
+
+// ----------------------------------------------------
+// 6. FAVORITES, COUPONS & AUDIT LOGS
+// ----------------------------------------------------
+model Favorite {
+  id        String   @id @default(cuid())
+  userId    String
+  productId String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+  @@map("favorites")
+}
+
+model Coupon {
+  id              String    @id @default(cuid())
+  code            String    @unique
+  discountPercent Decimal?  @db.Decimal(5, 2)
+  discountAmount  Decimal?  @db.Decimal(10, 2)
+  minSpend        Decimal   @default(0.00) @db.Decimal(10, 2)
+  maxUses         Int       @default(100)
+  usedCount       Int       @default(0)
+  isActive        Boolean   @default(true)
+  expiresAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("coupons")
+}
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  userId    String
+  action    String   // "LOGIN", "PASSWORD_CHANGE", "PURCHASE", "REGENERATE_API_KEY"
+  ipAddress String?
+  userAgent String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("activity_logs")
+}
+
+// ----------------------------------------------------
+// 7. BLOGS & NEWS
+// ----------------------------------------------------
+model Blog {
+  id          String   @id @default(cuid())
+  title       String
+  slug        String   @unique
+  category    String   // "Tutorials", "Security", "Facebook Guides", "Announcements"
+  thumbnail   String?
+  excerpt     String   @db.Text
+  content     String   @db.Text
+  author      String   @default("Smvaults Team")
+  views       Int      @default(0)
+  isPublished Boolean  @default(true)
+  publishedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("blogs")
+}

@@ -1,0 +1,8 @@
+node_modules
+dist
+.vercel
+.neon
+
+.vercel
+.env
+.env*
