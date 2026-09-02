@@ -11,6 +11,24 @@ const logFormat = format.combine(
   })
 );
 
+const loggerTransports: any[] = [
+  new transports.Console({
+    format: logFormat,
+  }),
+];
+
+// In Vercel / Serverless, filesystem is read-only. File transports crash with ENOENT mkdir 'logs'.
+if (!process.env.VERCEL) {
+  try {
+    loggerTransports.push(
+      new transports.File({ filename: "logs/error.log", level: "error" }),
+      new transports.File({ filename: "logs/combined.log" })
+    );
+  } catch {
+    // Ignore filesystem logger errors in read-only environments
+  }
+}
+
 const logger = createLogger({
   level: "info",
   format: format.combine(
@@ -19,20 +37,8 @@ const logger = createLogger({
     format.splat(),
     format.json()
   ),
-  defaultMeta: { service: process.env.SERVICE_NAME || "default-service-name" },
-  transports: [
-    new transports.Console({
-      // format: format.combine(
-      //   format.colorize(),
-      //   format.printf(({ timestamp, level, message, stack }) => {
-      //     return `${timestamp} ${level}: ${message} ${stack || ""}`;
-      //   })
-      // ),
-      format: logFormat,
-    }),
-    new transports.File({ filename: "logs/error.log", level: "error" }),
-    new transports.File({ filename: "logs/combined.log" }),
-  ],
+  defaultMeta: { service: process.env.SERVICE_NAME || "smvaults-service" },
+  transports: loggerTransports,
 });
 
 export default logger;
